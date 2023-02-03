@@ -1,0 +1,38 @@
+import boto3
+import csv
+import io
+
+session = boto3.Session()
+client = session.client('lambda')
+s3 = session.client('s3')
+
+# Get all regions
+ec2 = boto3.client('ec2')
+regions = [region['RegionName'] for region in ec2.describe_regions()['Regions']]
+
+# Write the headers for the CSV file
+headers = ['Region', 'FunctionName', 'Runtime', 'Memory', 'EphemeralStorage', 'ProvisionedConcurrency']
+file = io.StringIO()
+writer = csv.DictWriter(file, fieldnames=headers)
+writer.writeheader()
+
+# Loop through each region and get the Lambda functions
+for region in regions:
+    client = boto3.client('lambda', region_name=region)
+    functions = client.list_functions()
+    for function in functions['Functions']:
+        function_info = client.get_function_configuration(FunctionName=function['FunctionName'])
+        row = {
+            'Region': region,
+            'FunctionName': function_info['FunctionName'],
+            'Runtime': function_info['Runtime'],
+            'Memory': function_info['MemorySize'],
+            'EphemeralStorage': function_info.get('XrayTracingConfig', {}).get('Setting', 'Not Set'),
+            'ProvisionedConcurrency': function_info.get('ProvisionedConcurrency', 'Not Set')
+        }
+        writer.writerow(row)
+
+# Upload the CSV file to the S3 bucket
+s3.put_object(Bucket='hellokeke', Key='lambda_functions.csv', Body=file.getvalue())
+
+print("CSV report generated and uploaded to S3 bucket successfully!")

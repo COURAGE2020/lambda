@@ -2,39 +2,51 @@ import boto3
 import csv
 import io
 
+# Initialize a session using DigitalOcean Spaces.
+session = boto3.session.Session()
+
 def lambda_handler(event, context):
-    # Connect to the Lambda and S3 services
-    lambda_client = boto3.client('lambda')
+    # Get a list of all AWS regions
+    ec2 = boto3.client('ec2')
+    regions = [region['RegionName'] for region in ec2.describe_regions()['Regions']]
+
+    # Create a string buffer to store the report
+    csv_buffer = io.StringIO()
+    writer = csv.writer(csv_buffer)
+
+    # Write the header row
+    writer.writerow(['FunctionName', 'Region', 'Runtime', 'MemorySize', 'EphemeralStorage', 'ProvisionedConcurrency'])
+
+    # Iterate over all regions
+    for region in regions:
+        client = session.client('lambda', region_name=region)
+
+        # Get a list of all Lambdas in the region
+        lambdas = client.list_functions()['Functions']
+
+        # Write the Lambda details to the report string
+        for lambda_function in lambdas:
+            function_details = client.get_function_configuration(FunctionName=lambda_function['FunctionName'])
+
+            # get Provisioned Concurrency
+            provisioned_concurrency = "N/A"
+            try:
+                response = client.get_provisioned_concurrency_config(FunctionName=lambda_function['FunctionName'], Qualifier=function_details.get('Qualifier', '$LATEST'))
+                provisioned_concurrency = response["ProvisionedConcurrency"]
+            except:
+                pass
+                
+            writer.writerow([function_details['FunctionName'],
+                             region,
+                             function_details['Runtime'],
+                             function_details['MemorySize'],
+                             function_details.get('XrayConfig', {}).get('Level', 'N/A'),
+                             provisioned_concurrency
+                            ])
+
+    # Write the report to S3
     s3 = boto3.client('s3')
+    s3.put_object(Bucket='hellokeke', Key='lambda_report.csv', Body=csv_buffer.getvalue())
 
-    # Get the list of functions in your AWS account
-    functions = []
-    response = lambda_client.list_functions()
-    functions += response['Functions']
-    while 'NextMarker' in response:
-        response = lambda_client.list_functions(Marker=response['NextMarker'])
-        functions += response['Functions']
-
-    # Create a CSV file with the details of each function
-    file = io.StringIO()
-    writer = csv.DictWriter(file, fieldnames=['FunctionName', 'Runtime', 'MemorySize', 'Region', 'ProvisionedConcurrency', 'EphemeralStorage'])
-    writer.writeheader()
-    for function in functions:
-        function_details = lambda_client.get_function_configuration(FunctionName=function['FunctionName'])
-        function_data = {
-            'FunctionName': function_details['FunctionName'],
-            'Runtime': function_details['Runtime'],
-            'MemorySize': function_details['MemorySize'],
-            'Region': function['FunctionArn'].split(":")[3],
-            'ProvisionedConcurrency': 'N/A',
-            'EphemeralStorage': 'N/A'
-        }
-        if 'ProvisionedConcurrency' in function_details:
-            function_data['ProvisionedConcurrency'] = function_details['ProvisionedConcurrency']
-        if 'XrayConfig' in function_details and 'Bucket' in function_details['XrayConfig']:
-            function_data['EphemeralStorage'] = function_details['XrayConfig']['Bucket']
-        writer.writerow(function_data)
-    
-    # Store the report in an S3 bucket
-    file.seek(0)
-    s3.put_object(Bucket='hellokeke', Key='functions.csv', Body=file.read().encode('utf-8'))
+    # Return the S3 URL for the report
+    return f'https://hellokeke.s3.amazonaws.com/lambda_report.csv'

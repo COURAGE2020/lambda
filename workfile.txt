@@ -20,8 +20,8 @@ def lambda_handler(event, context):
         function_info['FunctionName'] = function_details['FunctionName']
         function_info['Runtime'] = function_details['Runtime']
         function_info['MemorySize'] = function_details['MemorySize']
-        function_info['ProvisionedConcurrency'] = function_details.get('ProvisionedConcurrency', 'N/A')
-        function_info['EphemeralStorage'] = function_details.get('XrayConfig', {}).get('OriginalRequest', {}).get('EphemeralStorage', 'N/A')
+        function_info['ProvisionedConcurrency'] = function_details.get('ProvisionedConcurrency', 0)
+        function_info['EphemeralStorage'] = function_details.get('XrayConfig', {}).get('OriginalRequest', {}).get('EphemeralStorage', 0)
 
         # Add the function information to the list
         function_list.append(function_info)
@@ -39,4 +39,4 @@ def lambda_handler(event, context):
     s3_client = boto3.client('s3')
 
     # Upload the CSV file to the s3 bucket
-    s3_client.put_object(Bucket='hellokeke', Key='function_list.csv', Body=buffer.getvalue())
+    s3_client.put_object(Bucket='hellokeke', Key='function_list.csv', Body=buffer.getvalue().encode())

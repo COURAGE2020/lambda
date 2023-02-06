@@ -23,12 +23,12 @@ def lambda_handler(event, context):
         next_marker = None
         while True:
             if next_marker is None:
-                response = region_client.list_functions(MaxItems=1)
+                response = region_client.list_functions()
             else:
-                response = region_client.list_functions(MaxItems=1, Marker=next_marker)
+                response = region_client.list_functions(Marker=next_marker)
             functions = response['Functions']
             for function in functions:
-                function_info = region_client.get_function_configuration(FunctionName=function['FunctionName'])
+                # function_info = region_client.get_function_configuration(FunctionName=function['FunctionName'])
                 provisioned_concurrency = region_client.list_provisioned_concurrency_configs(FunctionName=function['FunctionName'])
                 # print(provisioned_concurrency)
                 concurrencies = provisioned_concurrency['ProvisionedConcurrencyConfigs'] 
@@ -38,20 +38,20 @@ def lambda_handler(event, context):
                         print(eachProvision)
                         # Store the function information in the list
                         functions_info.append({
-                            'FunctionName': function_info['FunctionName'],
+                            'FunctionName': function['FunctionName'],
                             'Region': region,
-                            'Runtime': function_info['Runtime'],
-                            'MemorySize': function_info['MemorySize'],
-                            'EphemeralStorage': function_info.get('EphemeralStorage', {}).get('Size', 'N/A'),
+                            'Runtime': function['Runtime'],
+                            'MemorySize': function['MemorySize'],
+                            'EphemeralStorage': function.get('EphemeralStorage', {}).get('Size', 'N/A'),
                             'ProvisionedConcurrency': eachProvision['AllocatedProvisionedConcurrentExecutions']
                         })
                 else:
                     functions_info.append({
-                        'FunctionName': function_info['FunctionName'],
+                        'FunctionName': function['FunctionName'],
                         'Region': region,
-                        'Runtime': function_info['Runtime'],
-                        'MemorySize': function_info['MemorySize'],
-                        'EphemeralStorage': function_info.get('EphemeralStorage', {}).get('Size', 'N/A'),
+                        'Runtime': function['Runtime'],
+                        'MemorySize': function['MemorySize'],
+                        'EphemeralStorage': function.get('EphemeralStorage', {}).get('Size', 'N/A'),
                         'ProvisionedConcurrency': 'Not Set'
                     })
             next_marker = response.get('NextMarker')
@@ -62,11 +62,13 @@ def lambda_handler(event, context):
     # Write the contents of the CSV file to S3
     s3 = boto3.client('s3')
     csv_content = csv.StringIO()
-    fieldnames = ['FunctionName', 'Region', 'Runtime', 'MemorySize','EphemeralStorage', 'ProvisionedConcurrency']
+    fieldnames = ['FunctionName', 'Region', 'Runtime', 'MemorySize', 'ProvisionedConcurrency', 'EphemeralStorage']
     writer = csv.DictWriter(csv_content, fieldnames=fieldnames)
     writer.writeheader()
     for function_info in functions_info:
         writer.writerow(function_info)
-    s3.put_object(Bucket='hellokeke', Key='lambda_functions_new.csv', Body=csv_content.getvalue())
+    s3.put_object(Bucket='list-lambdas', Key='lambda_functions_new.csv', Body=csv_content.getvalue())
     
     return 'CSV file written to S3'
+
+lambda_handler(1,2)

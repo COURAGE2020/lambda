@@ -1,74 +1,207 @@
-import boto3
 import csv
+import time
+import sqlite3
+from io import BytesIO, StringIO
+from collections import defaultdict
+
+import boto3
+from botocore.exceptions import ClientError
+from openpyxl import load_workbook
+
+ACCOUNT_ID = '938540043867'
+BUCKET_NAME = 'listlambdas3bucket'
+EXCEL_FILE = 'ESG_resources_1_19_23.xlsx'
+SHEET_NAME = 'NPRD-Lambda'
+FINAL_CSV_FILE = 'lambda_output.csv'
+
+
+REGIONS = {
+    'AWS Virginia': 'us-east-1',
+    'AWS Ohio': 'us-east-2',
+    'AWS Oregon': 'us-west-2',
+    'AWS N. California': 'us-west-1',
+    'AWS Ireland': 'eu-west-1',
+    'AWS Singapore': 'ap-southeast-1',
+}
+
+
+def read_excel_file_from_s3():
+    s3 = boto3.client('s3')
+    file = s3.get_object(Bucket=listlambdas3bucket, Key=EXCEL_FILE)
+    content = file['Body'].read()
+    wb = load_workbook(BytesIO(content))
+    # select  sheet by name
+    ws = wb[SHEET_NAME]
+
+    rows = ws.iter_rows()
+    data = []
+    for cell in rows:
+        if cell[5].value and cell[5].value.strip() == 'Delete':
+            data.append((cell[0].value, REGIONS[cell[1].value]))
+
+    return data
+
+
+def load_data_into_sql(conn, data):
+    c = conn.cursor()
+    c.execute("CREATE TABLE cfn (id INTEGER PRIMARY KEY, lambda_name TEXT, "
+              "stack_name TEXT, region TEXT, status TEXT default 'NOT_STARTED', "
+              "message TEXT, completed BOOLEAN DEFAULT 0)"
+              )
+    c.executemany('INSERT INTO cfn (lambda_name, region) VALUES (?, ?)', data)
+    conn.commit()
+
+
+# get tags from lambda function
+def get_stack_name_from_lambda(client, conn, lambda_name, region):
+    arn = f'arn:aws:lambda:{region}:{ACCOUNT_ID}:function:{lambda_name}'
+    cur = conn.cursor()
+    try:
+        tags = client.list_tags(Resource=arn)['Tags']
+        stack_name = tags['aws:cloudformation:stack-name']
+        sql = 'UPDATE cfn SET stack_name = ? WHERE lambda_name = ? '\
+            'AND region = ?'
+        cur.execute(sql, (stack_name, lambda_name, region))
+    except ClientError as e:
+        if e.response['Error']['Code'] == 'ResourceNotFoundException':
+            msg = 'Lambda function does not exist'
+        else:
+            msg = str(e)
+        sql = 'UPDATE cfn SET status = ?, completed = ?, message = ? '\
+                'WHERE lambda_name = ? AND region = ?'
+        cur.execute(sql, ('FAILED', True, msg, lambda_name, region))
+    finally:
+        cur.close()
+        conn.commit()
+
+
+def group_regions(data):
+    reg_sort = defaultdict(list)
+    for row in data:
+        reg_sort[row[1]].append(row[0])
+    return reg_sort
+
+
+def delete_stack(con, client, stack_name, region):
+    cur = con.cursor()
+    try:
+        client.delete_stack(StackName=stack_name)
+    except ClientError as e:
+        if e.response['Error']['Code'] == 'ValidationError':
+            print('Stack does not exist')
+            sql = 'UPDATE cfn SET status = ?, completed = ?, message = ? '\
+                'WHERE stack_name = ? AND region = ?'
+            cur.execute(sql, ('FAILED', True, str(e), stack_name, region))
+    else:
+        sql = 'UPDATE cfn SET status = ? WHERE stack_name = ? AND region = ?'
+        cur.execute(sql, ('DELETE_IN_PROGRESS', stack_name, region))
+    finally:
+        cur.close()
+        con.commit()
+
+
+def describe_stack(con, client, stack_name, region):
+    cur = con.cursor()
+    try:
+        stack = client.describe_stacks(StackName=stack_name)
+        status = stack['Stacks'][0]['StackStatus']
+        if 'COMPLETE' in status or 'FAILED' in status:
+            msg = stack['Stacks'][0].get('StackStatusReason')
+            sql = 'UPDATE cfn SET status = ?, completed = ?, message = ? '\
+                'WHERE stack_name = ? AND region = ?'
+            cur.execute(sql, (status, True, msg, stack_name, region))
+        else:
+            sql = 'UPDATE cfn SET status = ? WHERE stack_name=? AND region=?'
+            cur.execute(sql, (status, stack_name, region))
+    except ClientError as e:
+        if e.response['Error']['Code'] == 'ValidationError':
+            if 'does not exist' in str(e):
+                sql = 'UPDATE cfn SET status = ?, completed = ? '\
+                    'WHERE stack_name = ? AND region = ?'
+                cur.execute(sql, ('DELETE_COMPLETE', True, stack_name, region))
+            else:
+                sql = 'UPDATE cfn SET status = ?, completed = ?, message = ? '\
+                    'WHERE stack_name = ? AND region = ?'
+                cur.execute(sql, ('FAILED', True, str(e), stack_name, region))
+    finally:
+        cur.close()
+        con.commit()
+
+
+def delete_stacks(conn):
+    cur = conn.cursor()
+    cur.execute('SELECT stack_name, region FROM cfn where completed = 0')
+    all_stacks = cur.fetchall()
+    all_stacks = group_regions(all_stacks)
+    for region, stacks in all_stacks.items():
+        cfn_client = boto3.client('cloudformation', region_name=region)
+        for stack in stacks:
+            print('Deleting:', stack, region)
+            delete_stack(conn, cfn_client, stack, region)
+    cur.close()
+    conn.commit()
+
+
+def check_status(conn):
+    cur = conn.cursor()
+    cur.execute('SELECT stack_name, region FROM cfn where completed = 0')
+    all_stacks = cur.fetchall()
+    all_stacks = group_regions(all_stacks)
+    for region, stacks in all_stacks.items():
+        cfn_client = boto3.client('cloudformation', region_name=region)
+        for stack in stacks:
+            print('Checking:', stack, region)
+            describe_stack(conn, cfn_client, stack, region)
+    cur.close()
+    conn.commit()
+
+def send_file_to_s3(cur):
+    s3 = boto3.client('s3')
+    # create csv file in memory
+    csv_buffer = StringIO()
+    csv_writer = csv.writer(csv_buffer, lineterminator='\n')
+
+    csv_writer.writerow(['Lambda Name', 'Stack Name', 'Region', 'Status',
+                            'Message', 'Completed'])
+
+    for row in cur.execute('SELECT * FROM cfn'):
+        row = list(row)[1:]
+        if row[-1] == 1:
+            row[-1] = 'Completed'
+        else:
+            row[-1] = 'Not Completed'
+        csv_writer.writerow(row)
+    s3.put_object(Body=csv_buffer.getvalue(), Bucket=BUCKET_NAME,
+                    Key=FINAL_CSV_FILE)
+
+
 
 def lambda_handler(event, context):
-    
-    # Create a boto3 client to access Lambda
-    client = boto3.client('lambda')
-    
-    # Get a list of all regions
-    regions = [r['RegionName'] for r in boto3.client('ec2').describe_regions()['Regions']]
-    
-    print(regions)
-    
-    # Create a list to store the function information
-    functions_info = []
-    
-    # Iterate through each region
-    for region in regions:
-        print(region)
-        # Create a boto3 client for the specific region
-        region_client = boto3.client('lambda', region_name=region)
-        
-        next_marker = None
-        while True:
-            if next_marker is None:
-                response = region_client.list_functions()
-            else:
-                response = region_client.list_functions(Marker=next_marker)
-            functions = response['Functions']
-            for function in functions:
-                # function_info = region_client.get_function_configuration(FunctionName=function['FunctionName'])
-                provisioned_concurrency = region_client.list_provisioned_concurrency_configs(FunctionName=function['FunctionName'])
-                # print(provisioned_concurrency)
-                concurrencies = provisioned_concurrency['ProvisionedConcurrencyConfigs'] 
-                if len(concurrencies)>0:
-                    for eachProvision in concurrencies:
-                        print("Printing Provisions Here")
-                        print(eachProvision)
-                        # Store the function information in the list
-                        functions_info.append({
-                            'FunctionName': function['FunctionName'],
-                            'Region': region,
-                            'Runtime': function['Runtime'],
-                            'MemorySize': function['MemorySize'],
-                            'EphemeralStorage': function.get('EphemeralStorage', {}).get('Size', 'N/A'),
-                            'ProvisionedConcurrency': eachProvision['AllocatedProvisionedConcurrentExecutions']
-                        })
-                else:
-                    functions_info.append({
-                        'FunctionName': function['FunctionName'],
-                        'Region': region,
-                        'Runtime': function['Runtime'],
-                        'MemorySize': function['MemorySize'],
-                        'EphemeralStorage': function.get('EphemeralStorage', {}).get('Size', 'N/A'),
-                        'ProvisionedConcurrency': 'Not Set'
-                    })
-            next_marker = response.get('NextMarker')
-            if not next_marker:
-                break
-        
-    print(functions_info)
-    # Write the contents of the CSV file to S3
-    s3 = boto3.client('s3')
-    csv_content = csv.StringIO()
-    fieldnames = ['FunctionName', 'Region', 'Runtime', 'MemorySize', 'ProvisionedConcurrency', 'EphemeralStorage']
-    writer = csv.DictWriter(csv_content, fieldnames=fieldnames)
-    writer.writeheader()
-    for function_info in functions_info:
-        writer.writerow(function_info)
-    s3.put_object(Bucket='list-lambdas', Key='lambda_functions_new.csv', Body=csv_content.getvalue())
-    
-    return 'CSV file written to S3'
+    start = time.time()
+    conn = sqlite3.connect(f'cfn-{round(start)}.db')
+    cur = conn.cursor()
+    data = read_excel_file_from_s3()
+    load_data_into_sql(conn, data)
 
-lambda_handler(1,2)
+    reg_wise_data = group_regions(data)
+
+    for region, lambdas in reg_wise_data.items():
+        client = boto3.client('lambda', region_name=region)
+        for lambda_name in lambdas:
+            get_stack_name_from_lambda(client, conn, lambda_name, region)
+    for row in cur.execute('SELECT * FROM cfn'):
+        print(row)
+    # delete_stacks(conn)
+    # while True:
+    #     check_status(conn)
+    #     if not cur.execute('SELECT * FROM cfn where completed = 0').fetchall():
+    #         break
+    #     time.sleep(10)
+
+    # send_file_to_s3(cur)
+
+    cur.close()
+    conn.close()
+
+if __name__ == '__main__':
+    lambda_handler(None, None)

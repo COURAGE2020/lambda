@@ -2,7 +2,6 @@ import boto3
 import csv
 
 def lambda_handler(event, context):
-
     # Create a boto3 client to access Lambda
     client = boto3.client('lambda')
     
@@ -27,38 +26,42 @@ def lambda_handler(event, context):
             # Get the function information
             function_info = region_client.get_function_configuration(FunctionName=function['FunctionName'])
             provisioned_concurrency = region_client.list_provisioned_concurrency_configs(FunctionName=function['FunctionName'])
-            print(provisioned_concurrency)
-            concurrencies = provisioned_concurrency['ProvisionedConcurrencyConfigs'] 
-            if len(concurrencies)>0:
-               for eachProvision in concurrencies:
-                   print("Printing Provisions Here")
-                   print(eachProvision)
-                   # Store the function information in the list
-                   functions_info.append({
-                   'FunctionName': function_info['FunctionName'],
-                   'Region': region,
-                   'Runtime': function_info['Runtime'],
-                   'MemorySize': function_info['MemorySize'],
-                   'ProvisionedConcurrency': eachProvision['AllocatedProvisionedConcurrentExecutions']
-                   })
+            concurrencies = provisioned_concurrency.get('ProvisionedConcurrencyConfigs', [])
+            
+            # Get the function's ephemeral storage
+            result = region_client.get_function(FunctionName=function['FunctionName'])
+            ephemeral_storage = result.get('Environment', {}).get('Variables', {}).get('AWS_LAMBDA_FUNCTION_EPHEMERAL_STORAGE', 'Not Set')
+            
+            if len(concurrencies) > 0:
+                for each_provision in concurrencies:
+                    functions_info.append({
+                        'FunctionName': function_info['FunctionName'],
+                        'Region': region,
+                        'Runtime': function_info['Runtime'],
+                        'MemorySize': function_info['MemorySize'],
+                        'ProvisionedConcurrency': each_provision['AllocatedProvisionedConcurrentExecutions'],
+                        'EphemeralStorage': ephemeral_storage
+                    })
             else:
                 functions_info.append({
-                'FunctionName': function_info['FunctionName'],
-                'Region': region,
-                'Runtime': function_info['Runtime'],
-                'MemorySize': function_info['MemorySize'],
-                'ProvisionedConcurrency': 'Not Set'
+                    'FunctionName': function_info['FunctionName'],
+                    'Region': region,
+                    'Runtime': function_info['Runtime'],
+                    'MemorySize': function_info['MemorySize'],
+                    'ProvisionedConcurrency': 'Not Set',
+                    'EphemeralStorage': ephemeral_storage
                 })
+                
     print(functions_info)
     
     # Write the contents of the CSV file to S3
     s3 = boto3.client('s3')
     csv_content = csv.StringIO()
-    fieldnames = ['FunctionName', 'Region', 'Runtime', 'MemorySize', 'ProvisionedConcurrency']
+    fieldnames = ['FunctionName', 'Region', 'Runtime', 'MemorySize', 'ProvisionedConcurrency', 'EphemeralStorage']
     writer = csv.DictWriter(csv_content, fieldnames=fieldnames)
     writer.writeheader()
     for function_info in functions_info:
         writer.writerow(function_info)
-    s3.put_object(Bucket='', Key='lambda_functions_new.csv', Body=csv_content.getvalue())
+    s3.put_object(Bucket='hellokeke', Key='lambda_functions_new.csv', Body=csv_content.getvalue())
     
     return 'CSV file written to S3'

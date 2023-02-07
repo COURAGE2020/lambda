@@ -8,8 +8,8 @@ import boto3
 from botocore.exceptions import ClientError
 from openpyxl import load_workbook
 
-ACCOUNT_ID = '938540043867'
-BUCKET_NAME = 'listlambdas3bucket'
+ACCOUNT_ID = '462426397022'
+BUCKET_NAME = 'boto3-test-krishh'
 EXCEL_FILE = 'ESG_resources_1_19_23.xlsx'
 SHEET_NAME = 'NPRD-Lambda'
 FINAL_CSV_FILE = 'lambda_output.csv'
@@ -27,7 +27,7 @@ REGIONS = {
 
 def read_excel_file_from_s3():
     s3 = boto3.client('s3')
-    file = s3.get_object(Bucket=listlambdas3bucket, Key=EXCEL_FILE)
+    file = s3.get_object(Bucket=BUCKET_NAME, Key=EXCEL_FILE)
     content = file['Body'].read()
     wb = load_workbook(BytesIO(content))
     # select  sheet by name
@@ -58,10 +58,17 @@ def get_stack_name_from_lambda(client, conn, lambda_name, region):
     cur = conn.cursor()
     try:
         tags = client.list_tags(Resource=arn)['Tags']
-        stack_name = tags['aws:cloudformation:stack-name']
-        sql = 'UPDATE cfn SET stack_name = ? WHERE lambda_name = ? '\
-            'AND region = ?'
-        cur.execute(sql, (stack_name, lambda_name, region))
+        stack_name = tags.get('aws:cloudformation:stack-name')
+        if not stack_name:
+            sql = 'UPDATE cfn SET stack_name = ? WHERE lambda_name = ? '\
+                'AND region = ?'
+            cur.execute(sql, (stack_name, lambda_name, region))
+        else:
+            msg = 'Stack name not found in lambda tags'
+            sql = 'UPDATE cfn SET status = ?, completed = ?, message = ? '\
+                'WHERE lambda_name = ? AND region = ?'
+            cur.execute(sql, ('FAILED', True, msg, lambda_name, region))
+            
     except ClientError as e:
         if e.response['Error']['Code'] == 'ResourceNotFoundException':
             msg = 'Lambda function does not exist'

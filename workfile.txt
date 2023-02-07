@@ -59,7 +59,7 @@ def get_stack_name_from_lambda(client, conn, lambda_name, region):
     try:
         tags = client.list_tags(Resource=arn)['Tags']
         stack_name = tags.get('aws:cloudformation:stack-name')
-        if not stack_name:
+        if stack_name:
             sql = 'UPDATE cfn SET stack_name = ? WHERE lambda_name = ? '\
                 'AND region = ?'
             cur.execute(sql, (stack_name, lambda_name, region))

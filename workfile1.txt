@@ -59,12 +59,13 @@ def get_stack_name_from_lambda(client, conn, lambda_name, region):
     try:
         tags = client.list_tags(Resource=arn)['Tags']
         stack_name = tags.get('aws:cloudformation:stack-name')
+        print(lambda_name, stack_name)
         if stack_name:
             sql = 'UPDATE cfn SET stack_name = ? WHERE lambda_name = ? '\
                 'AND region = ?'
             cur.execute(sql, (stack_name, lambda_name, region))
         else:
-            msg = 'Stack name not found in lambda tags'
+            msg = 'Stack name not found in lambda'
             sql = 'UPDATE cfn SET status = ?, completed = ?, message = ? '\
                 'WHERE lambda_name = ? AND region = ?'
             cur.execute(sql, ('FAILED', True, msg, lambda_name, region))
@@ -82,9 +83,11 @@ def get_stack_name_from_lambda(client, conn, lambda_name, region):
         conn.commit()
 
 
-def group_regions(data):
+def group_regions(data, _print=False):
     reg_sort = defaultdict(list)
     for row in data:
+        if _print:
+            print(f"Stack: {row[0]}, Region: {row[1]}, Lambda: {row[2]}")
         reg_sort[row[1]].append(row[0])
     return reg_sort
 
@@ -137,13 +140,16 @@ def describe_stack(con, client, stack_name, region):
 
 def delete_stacks(conn):
     cur = conn.cursor()
-    cur.execute('SELECT stack_name, region FROM cfn where completed = 0')
+    sql = 'SELECT stack_name, region, lambda_name FROM cfn '\
+        'where completed = 0 and stack_name is not null'
+    cur.execute(sql)
     all_stacks = cur.fetchall()
-    all_stacks = group_regions(all_stacks)
+    print("List of Lambda functions to be deleted")
+    all_stacks = group_regions(all_stacks, _print=True)
     for region, stacks in all_stacks.items():
         cfn_client = boto3.client('cloudformation', region_name=region)
         for stack in stacks:
-            print('Deleting:', stack, region)
+            print(f'Deleting:', stack, region)
             delete_stack(conn, cfn_client, stack, region)
     cur.close()
     conn.commit()
@@ -151,7 +157,9 @@ def delete_stacks(conn):
 
 def check_status(conn):
     cur = conn.cursor()
-    cur.execute('SELECT stack_name, region FROM cfn where completed = 0')
+    sql = 'SELECT stack_name, region, lambda_name FROM cfn '\
+        'where completed = 0 and stack_name is not null'
+    cur.execute(sql)
     all_stacks = cur.fetchall()
     all_stacks = group_regions(all_stacks)
     for region, stacks in all_stacks.items():
@@ -198,15 +206,18 @@ def lambda_handler(event, context):
             get_stack_name_from_lambda(client, conn, lambda_name, region)
     for row in cur.execute('SELECT * FROM cfn'):
         print(row)
-    # delete_stacks(conn)
-    # while True:
-    #     check_status(conn)
-    #     if not cur.execute('SELECT * FROM cfn where completed = 0').fetchall():
-    #         break
-    #     time.sleep(10)
+    delete_stacks(conn)
+    while True:
+        check_status(conn)
+        if not cur.execute('SELECT * FROM cfn where completed = 0').fetchall():
+            break
+        time.sleep(10)
 
-    # send_file_to_s3(cur)
-
+    send_file_to_s3(cur)
+    print('==============All done==============')
+    for row in cur.execute('SELECT * FROM cfn'):
+        print(row)
+    print(f'Total time taken: {time.time() - start}')
     cur.close()
     conn.close()
 

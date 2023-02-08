@@ -95,7 +95,9 @@ def group_regions(data, _print=False):
 def delete_stack(con, client, stack_name, region):
     cur = con.cursor()
     try:
-        client.delete_stack(StackName=stack_name)
+        res = client.delete_stack(StackName=stack_name)
+        print('Stack deletion in progress')
+        print(res)
     except ClientError as e:
         if e.response['Error']['Code'] == 'ValidationError':
             print('Stack does not exist')
@@ -115,6 +117,7 @@ def describe_stack(con, client, stack_name, region):
     try:
         stack = client.describe_stacks(StackName=stack_name)
         status = stack['Stacks'][0]['StackStatus']
+        print('Stack status: ', status)
         if 'COMPLETE' in status or 'FAILED' in status:
             msg = stack['Stacks'][0].get('StackStatusReason')
             sql = 'UPDATE cfn SET status = ?, completed = ?, message = ? '\
@@ -195,7 +198,8 @@ def lambda_handler(event, context):
     start = time.time()
     conn = sqlite3.connect(f'cfn-{round(start)}.db')
     cur = conn.cursor()
-    data = read_excel_file_from_s3()
+    # data = read_excel_file_from_s3()
+    data = [('workflow-uat-read-answer', 'ap-southeast-1')]
     load_data_into_sql(conn, data)
 
     reg_wise_data = group_regions(data)

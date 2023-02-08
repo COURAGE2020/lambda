@@ -1,4 +1,5 @@
 import csv
+from pprint import pprint
 import time
 import sqlite3
 from io import BytesIO, StringIO
@@ -95,6 +96,14 @@ def group_regions(data, _print=False):
 def delete_stack(con, client, stack_name, region):
     cur = con.cursor()
     try:
+        stack = client.describe_stacks(StackName=stack_name)
+        termination_protection = stack['Stacks'][0]['EnableTerminationProtection']
+        if termination_protection:
+            client.update_termination_protection(
+                EnableTerminationProtection=False,
+                StackName=stack_name
+            )
+            print('Termination protection disabled:', stack_name)
         client.delete_stack(StackName=stack_name)
         print('Stack deletion in progress')
         # print(res)

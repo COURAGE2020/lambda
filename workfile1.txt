@@ -1,73 +1,102 @@
----
-AWSTemplateFormatVersion: '2010-09-09'
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Template for importing an existing RDS cluster"
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: dev
+    Description: An environment name that will be prefixed to resource names
+  Project:
+    Type: String
+    Default: rdm
+    Description: The project name that will be prefixed to resource names
+
+  AvailabilityZones:
+    Type: List<AWS::EC2::AvailabilityZone::Name>
+    Default: 'us-east-1a, us-east-1b, us-east-1c'
+    Description: The Availability Zones (AZs) where instances in the DB cluster can be created.
+  DBInstanceClass:
+    Type: String
+    Default: db.t3.medium
+    Description: The compute and memory capacity of the DB instances.
+  Engine:
+    Type: String
+    Default: aurora-postgresql
+    Description: The name of the database engine to be used for this DB cluster.
+  EngineVersion:
+    Type: String
+    Default: 14.5
+    Description: The version number of the database engine to use.  
+
+  DBBackupRetentionPeriod:
+    Type: Number
+    Default: 1
+    Description: The number of days for which automated backups are retained.
+  DBMasterUsername:
+    Type: String
+    Default: krish
+    Description: The name of the master user for the DB cluster.
+  DatabaseName:
+    Type: String
+    Default: test
+    Description: The name of the database to create when the DB cluster is created.
+  StorageEncrypted:
+    Type: String
+    Default: true
+    Description: Whether the DB cluster is encrypted.
+  MinCapacity:
+    Type: Number
+    Default: 1
+    Description: The minimum capacity for an Aurora Serverless DB cluster.
+  MaxCapacity:
+    Type: Number
+    Default: 2
+    Description: The maximum capacity for an Aurora Serverless DB cluster.
+  VPCSecurityGroupIds:
+    Type: List<AWS::EC2::SecurityGroup::Id>
+    Default: 'sg-c308d6e6'
+    # Default: 'sg-c308d6e6, sg-0b0b0b0b'
+    Description: A list of EC2 VPC security groups to associate with this DB cluster.
+
 Resources:
-  IAMRole:
-    Type: AWS::IAM::Role
+  MyRdsCluster:
+    Type: AWS::RDS::DBCluster
+    DeletionPolicy: Retain
     Properties:
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-        - Effect: Allow
-          Principal:
-            Service:
-            - lambda.amazonaws.com
-            - glue.amazonaws.com
-            - athena.amazonaws.com
-          Action:
-          - sts:AssumeRole
-      Path: /
-      Policies:
-      - PolicyName: s3-full-access
-        PolicyDocument:
-          Version: '2012-10-17'
-          Statement:
-          - Effect: Allow
-            Action: 's3:*'
-            Resource: '*'
-      - PolicyName: Lambda-full-access
-        PolicyDocument:
-          Version: '2012-10-17'
-          Statement:
-          - Effect: Allow
-            Action: 'lambda:*'
-            Resource: '*'
-      - PolicyName: aws-glue-service-role
-        PolicyDocument:
-          Version: '2012-10-17'
-          Statement:
-          - Effect: Allow
-            Action:
-            - glue:CreateDevEndpoint
-            - glue:CreateJob
-            - glue:GetDevEndpoint
-            - glue:GetJobRun
-            - glue:GetJob
-            - glue:UpdateDevEndpoint
-            Resource: '*'
-      - PolicyName: dynamodb-full-access
-        PolicyDocument:
-          Version: '2012-10-17'
-          Statement:
-          - Effect: Allow
-            Action: 'dynamodb:*'
-            Resource: '*'
-      - PolicyName: secrets-manager-read-only
-        PolicyDocument:
-          Version: '2012-10-17'
-          Statement:
-          - Effect: Allow
-            Action:
-            - secretsmanager:DescribeSecret
-            - secretsmanager:GetSecretValue
-            - secretsmanager:ListSecretVersionIds
-            Resource: '*'
-      - PolicyName: athena-execute-queries
-        PolicyDocument:
-          Version: '2012-10-17'
-          Statement:
-          - Effect: Allow
-            Action:
-            - athena:StartQueryExecution
-            - athena:GetQueryExecution
-            - athena:StopQueryExecution
-            Resource: '*'
+      AvailabilityZones: !Ref AvailabilityZones
+      BackupRetentionPeriod: !Ref DBBackupRetentionPeriod
+      DBClusterIdentifier: !Sub "${Project}-${EnvironmentName}-aurora-pg-${AWS::Region}"
+      DBSubnetGroupName: !ImportValue "RDS-SubnetGroup"
+      Engine: !Ref Engine
+      EngineVersion: !Ref EngineVersion
+      MasterUsername: !Ref DBMasterUsername
+      DatabaseName: !Ref DatabaseName
+      StorageEncrypted: !Ref StorageEncrypted
+      ServerlessV2ScalingConfiguration:
+        MaxCapacity: !Ref MaxCapacity
+        MinCapacity: !Ref MinCapacity
+      VpcSecurityGroupIds: !Ref VPCSecurityGroupIds
+      Tags:
+        - Key: Project
+          Value: !Ref Project
+        - Key: Environment
+          Value: !Ref EnvironmentName
+       
+
+  # add write instance
+  MyRdsClusterWriter:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Retain
+    Properties:
+      DBClusterIdentifier: !Sub "${Project}-${EnvironmentName}-aurora-pg-${AWS::Region}"
+      DBInstanceClass: !Ref DBInstanceClass
+      DBInstanceIdentifier: !Sub "${Project}-${EnvironmentName}-aurora-pg-${AWS::Region}"
+
+  # add read instance
+  MyRdsClusterReader:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Retain
+    Properties:
+      DBClusterIdentifier: !Sub "${Project}-${EnvironmentName}-aurora-pg-${AWS::Region}"
+      DBInstanceClass: !Ref DBInstanceClass
+      DBInstanceIdentifier: !Sub "${Project}-${EnvironmentName}-aurora-pg-${AWS::Region}-ro1"

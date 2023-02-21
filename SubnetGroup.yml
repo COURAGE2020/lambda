@@ -1,0 +1,30 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Template for importing an existing Subnet Group"
+
+Parameters:
+  SubnetGroupName:
+    Type: String
+    Description: "The name of the Subnet group."
+    Default: "default-vpc-3af2e940"
+  Projecy
+Resources:
+  SubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    DeletionPolicy: Retain
+    Properties:
+      DBSubnetGroupName: !Ref SubnetGroupName
+      DBSubnetGroupDescription: "Subnet group for RDS"
+      SubnetIds:
+        - subnet-b43c2e8a
+        - subnet-cd3ff0ab	
+        - subnet-d9ef7194	
+        - subnet-61c6466f	
+        - subnet-c3c316e2	
+        - subnet-9aaa61c5
+
+Outputs:
+  SubnetGroup:
+    Description: "Subnet group for RDS"
+    Value: !Ref SubnetGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-SubnetGroup"

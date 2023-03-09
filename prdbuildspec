@@ -1,0 +1,15 @@
+version: 0.2
+
+env:
+  variables:
+    SourceAccountId: 941304162621
+    DestinationAccountId: 393110548791
+    SourceVaultName: DynamoDBVault
+    DestinationVaultName: PrdDynamoDBVault
+    DestinationRegion: us-east-1
+
+phases:
+  build:
+    commands:
+        - echo aws backup start-copy-job --recovery-point-arn $RecoveryPointArn --source-backup-vault-name $SourceVaultName --destination-backup-vault-arn arn:aws:backup:$DestinationRegion:$DestinationAccountId:backup-vault:$DestinationVaultName --iam-role-arn arn:aws:iam::$SourceAccountId:role/service-role/AWSBackupDefaultServiceRole
+        - aws backup start-copy-job --recovery-point-arn $RecoveryPointArn --source-backup-vault-name $SourceVaultName --destination-backup-vault-arn arn:aws:backup:$DestinationRegion:$DestinationAccountId:backup-vault:$DestinationVaultName --iam-role-arn arn:aws:iam::$SourceAccountId:role/service-role/AWSBackupDefaultServiceRole
